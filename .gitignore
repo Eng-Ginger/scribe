@@ -1,0 +1,10 @@
+# Secrets — never commit your API key
+.env.local
+.env
+
+# Dependencies (none needed, but just in case)
+node_modules/
+
+# OS noise
+.DS_Store
+Thumbs.db

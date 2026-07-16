@@ -1,0 +1,859 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Scribe — Video to Transcript</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Inter:wght@400;450;500;600&display=swap" rel="stylesheet" />
+<style>
+  :root {
+    --bg: #FAFAFC;
+    --bg-soft: #F2F2F7;
+    --ink: #1A1B2E;
+    --muted: #6B6F8A;
+    --line: #E7E7EF;
+    --card: #FFFFFF;
+    --accent: #6D5AE6;
+    --accent-2: #37C6C4;
+    --danger: #D8506A;
+    --shadow: 0 1px 2px rgba(26,27,46,.04), 0 12px 32px rgba(26,27,46,.06);
+    --radius: 20px;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  html, body { height: 100%; }
+
+  body {
+    background: var(--bg);
+    color: var(--ink);
+    font-family: 'Inter', system-ui, sans-serif;
+    font-feature-settings: 'cv11', 'ss01';
+    -webkit-font-smoothing: antialiased;
+    display: flex;
+    flex-direction: column;
+    min-height: 100vh;
+    padding: 32px 20px;
+  }
+
+  main {
+    width: 100%;
+    max-width: 640px;
+    margin: auto;
+  }
+
+  /* ---------- Header ---------- */
+  header { text-align: center; margin-bottom: 40px; }
+
+  .mark {
+    display: inline-flex;
+    align-items: center;
+    gap: 9px;
+    font-family: 'Space Grotesk', sans-serif;
+    font-weight: 600;
+    font-size: 15px;
+    letter-spacing: -0.01em;
+    color: var(--ink);
+    margin-bottom: 28px;
+  }
+  .mark .dot {
+    width: 22px; height: 22px; border-radius: 7px;
+    background: linear-gradient(135deg, var(--accent), var(--accent-2));
+    display: inline-block;
+    box-shadow: 0 4px 12px rgba(109,90,230,.35);
+  }
+
+  h1 {
+    font-family: 'Space Grotesk', sans-serif;
+    font-weight: 600;
+    font-size: clamp(30px, 6vw, 44px);
+    line-height: 1.05;
+    letter-spacing: -0.03em;
+    margin-bottom: 14px;
+  }
+  h1 .grad {
+    background: linear-gradient(100deg, var(--accent), var(--accent-2));
+    -webkit-background-clip: text; background-clip: text;
+    -webkit-text-fill-color: transparent;
+  }
+
+  .lede {
+    color: var(--muted);
+    font-size: 16px;
+    line-height: 1.55;
+    max-width: 440px;
+    margin: 0 auto;
+  }
+
+  /* ---------- Panel / state container ---------- */
+  .panel {
+    background: var(--card);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    box-shadow: var(--shadow);
+    overflow: hidden;
+  }
+
+  .stage { display: none; }
+  .stage.active { display: block; animation: rise .45s cubic-bezier(.2,.7,.2,1) both; }
+  @keyframes rise { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
+
+  /* ---------- Dropzone ---------- */
+  .drop {
+    padding: 52px 32px;
+    text-align: center;
+    cursor: pointer;
+    transition: background .25s ease;
+    position: relative;
+  }
+  .drop:hover { background: var(--bg-soft); }
+  .drop.drag {
+    background: linear-gradient(180deg, rgba(109,90,230,.06), rgba(55,198,196,.06));
+  }
+  .drop.drag .ring { border-color: var(--accent); transform: scale(1.04); }
+
+  .ring {
+    width: 76px; height: 76px;
+    margin: 0 auto 22px;
+    border: 2px dashed var(--line);
+    border-radius: 22px;
+    display: grid; place-items: center;
+    transition: border-color .25s ease, transform .25s ease;
+  }
+  .ring svg { width: 30px; height: 30px; stroke: var(--accent); }
+
+  .drop h2 {
+    font-family: 'Space Grotesk', sans-serif;
+    font-size: 19px; font-weight: 600; letter-spacing: -0.01em;
+    margin-bottom: 6px;
+  }
+  .drop p { color: var(--muted); font-size: 14px; }
+  .drop .hint { margin-top: 18px; font-size: 12.5px; color: var(--muted); opacity: .8; }
+  .drop .browse { color: var(--accent); font-weight: 550; }
+
+  /* ---------- Processing ---------- */
+  .work { padding: 44px 32px; text-align: center; }
+
+  .work .file-name {
+    font-size: 13.5px; color: var(--muted);
+    margin-bottom: 26px;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+
+  .status-line {
+    font-family: 'Space Grotesk', sans-serif;
+    font-size: 17px; font-weight: 500; letter-spacing: -0.01em;
+    margin-bottom: 24px;
+  }
+
+  /* progress bar (model download / decode) */
+  .bar {
+    height: 7px; border-radius: 99px; background: var(--bg-soft);
+    overflow: hidden; margin: 0 auto; max-width: 320px;
+  }
+  .bar > i {
+    display: block; height: 100%; width: 0%;
+    background: linear-gradient(90deg, var(--accent), var(--accent-2));
+    border-radius: 99px;
+    transition: width .3s ease;
+  }
+  .bar.indeterminate > i {
+    width: 40%;
+    animation: slide 1.3s ease-in-out infinite;
+  }
+  @keyframes slide {
+    0% { margin-left: -40%; } 100% { margin-left: 100%; }
+  }
+  .sub { margin-top: 14px; font-size: 12.5px; color: var(--muted); }
+
+  /* waveform signature (transcribing) */
+  .wave { display: flex; align-items: center; justify-content: center; gap: 4px; height: 60px; margin-bottom: 24px; }
+  .wave span {
+    width: 4px; border-radius: 99px;
+    background: linear-gradient(180deg, var(--accent), var(--accent-2));
+    animation: pulse 1.1s ease-in-out infinite;
+  }
+  @keyframes pulse {
+    0%, 100% { height: 10px; opacity: .55; }
+    50% { height: 46px; opacity: 1; }
+  }
+
+  /* ---------- Results view ---------- */
+  main.wide { max-width: 1020px; }
+  .panel.bare { background: none; border: none; box-shadow: none; overflow: visible; }
+
+  .results-grid {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 320px;
+    gap: 20px;
+    align-items: start;
+  }
+  .results-main { display: flex; flex-direction: column; gap: 20px; min-width: 0; }
+  @media (max-width: 880px) {
+    .results-grid { grid-template-columns: 1fr; }
+  }
+
+  .gen-card, .side-card {
+    background: var(--card);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    box-shadow: var(--shadow);
+    padding: 20px;
+  }
+
+  .gen-head {
+    display: flex; align-items: center; justify-content: space-between;
+    gap: 12px; margin-bottom: 14px; flex-wrap: wrap;
+  }
+  .gen-head h3 {
+    font-family: 'Space Grotesk', sans-serif;
+    font-weight: 600; font-size: 15px; letter-spacing: -0.01em;
+    display: flex; align-items: center; gap: 8px;
+  }
+  .tick {
+    width: 18px; height: 18px; border-radius: 99px;
+    background: linear-gradient(135deg, var(--accent), var(--accent-2));
+    display: grid; place-items: center; flex: none;
+  }
+  .tick svg { width: 11px; height: 11px; stroke: #fff; }
+  .actions { display: flex; gap: 8px; }
+
+  .gen-output {
+    background: var(--bg);
+    border: 1px solid var(--line);
+    border-radius: 14px;
+    padding: 16px;
+    font-size: 14.5px; line-height: 1.65;
+    white-space: pre-wrap; word-break: break-word;
+  }
+  .gen-block + .gen-block { margin-top: 14px; }
+  .gen-label {
+    display: flex; align-items: center; justify-content: space-between; gap: 8px;
+    font-size: 11.5px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase;
+    color: var(--muted); margin-bottom: 6px;
+  }
+  .gen-label button { padding: 4px 10px; font-size: 12px; border-radius: 8px; }
+
+  .gen-options {
+    display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 14px;
+  }
+  @media (max-width: 560px) { .gen-options { grid-template-columns: 1fr; } }
+  .gen-options input {
+    font-family: 'Inter', sans-serif; font-size: 13.5px; color: var(--ink);
+    background: var(--bg); border: 1px solid var(--line); border-radius: 10px;
+    padding: 9px 12px; width: 100%; outline: none;
+    transition: border-color .18s ease, box-shadow .18s ease;
+  }
+  .gen-options input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(109,90,230,.12); }
+  .gen-options input::placeholder { color: var(--muted); opacity: .8; }
+
+  .gen-status { text-align: center; padding: 6px 0 2px; }
+  .gen-status .msg { font-size: 13px; color: var(--muted); margin-top: 6px; }
+  .wave.mini { height: 38px; margin: 0; gap: 3px; }
+  .wave.mini span { width: 3px; animation-name: pulse-mini; }
+  @keyframes pulse-mini {
+    0%, 100% { height: 8px; opacity: .55; }
+    50% { height: 30px; opacity: 1; }
+  }
+
+  .gen-error { text-align: center; padding: 10px 0 4px; }
+  .gen-error p { color: var(--danger); font-size: 13.5px; line-height: 1.5; margin-bottom: 12px; word-break: break-word; }
+  .gen-empty { color: var(--muted); font-size: 13.5px; text-align: center; padding: 10px 0 4px; }
+
+  .results-side .transcript { font-size: 13.5px; line-height: 1.6; max-height: 420px; }
+  .results-side .actions button { padding: 6px 10px; font-size: 12px; }
+
+  button {
+    font-family: 'Inter', sans-serif;
+    font-size: 13px; font-weight: 550;
+    border: 1px solid var(--line);
+    background: var(--card);
+    color: var(--ink);
+    padding: 8px 14px;
+    border-radius: 10px;
+    cursor: pointer;
+    transition: background .18s ease, border-color .18s ease, transform .1s ease;
+    display: inline-flex; align-items: center; gap: 6px;
+  }
+  button:hover { background: var(--bg-soft); }
+  button:active { transform: scale(.97); }
+  button svg { width: 14px; height: 14px; stroke: currentColor; }
+  button.primary { background: var(--ink); color: #fff; border-color: var(--ink); }
+  button.primary:hover { background: #2c2d47; }
+  button.copied { color: var(--accent); border-color: var(--accent); }
+
+  .transcript {
+    background: var(--bg);
+    border: 1px solid var(--line);
+    border-radius: 14px;
+    padding: 20px;
+    font-size: 15px; line-height: 1.7;
+    color: var(--ink);
+    white-space: pre-wrap;
+    max-height: 340px; overflow-y: auto;
+    word-break: break-word;
+  }
+  .transcript::-webkit-scrollbar { width: 8px; }
+  .transcript::-webkit-scrollbar-thumb { background: var(--line); border-radius: 99px; }
+
+  .reset-row { text-align: center; margin-top: 18px; }
+  .reset-row button { border: none; background: none; color: var(--muted); font-size: 13px; }
+  .reset-row button:hover { color: var(--ink); background: none; }
+
+  /* ---------- Error ---------- */
+  .error { padding: 40px 32px; text-align: center; }
+  .error .badge {
+    width: 46px; height: 46px; border-radius: 14px;
+    background: rgba(216,80,106,.1); color: var(--danger);
+    display: grid; place-items: center; margin: 0 auto 18px;
+  }
+  .error .badge svg { width: 22px; height: 22px; stroke: var(--danger); }
+  .error h2 { font-family: 'Space Grotesk', sans-serif; font-size: 18px; margin-bottom: 8px; }
+  .error p { color: var(--muted); font-size: 14px; line-height: 1.55; max-width: 400px; margin: 0 auto 20px; }
+
+  /* ---------- Footer ---------- */
+  footer {
+    text-align: center; margin-top: 28px;
+    font-size: 12.5px; color: var(--muted);
+    display: flex; align-items: center; justify-content: center; gap: 7px;
+  }
+  footer svg { width: 13px; height: 13px; stroke: var(--muted); }
+
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after { animation-duration: .001ms !important; transition-duration: .001ms !important; }
+    .wave span { height: 28px; opacity: .8; }
+  }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <div class="mark"><span class="dot"></span> Scribe</div>
+    <h1>Turn any video into <span class="grad">clean text</span>.</h1>
+    <p class="lede">Drop a video in, get the transcript out. It all runs on your own device — nothing is ever uploaded.</p>
+  </header>
+
+  <div class="panel">
+    <!-- IDLE -->
+    <section class="stage active" id="stage-idle">
+      <div class="drop" id="drop">
+        <div class="ring">
+          <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M12 15V3"/><path d="m7 8 5-5 5 5"/><path d="M5 15v4a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-4"/>
+          </svg>
+        </div>
+        <h2>Drop a video here</h2>
+        <p>or <span class="browse">browse your files</span></p>
+        <div class="hint">MP4, MOV, WebM, M4A, MP3 · stays on your device</div>
+      </div>
+      <input type="file" id="file" accept="video/*,audio/*" hidden />
+    </section>
+
+    <!-- WORKING -->
+    <section class="stage" id="stage-work">
+      <div class="work">
+        <div class="file-name" id="work-name"></div>
+        <div class="status-line" id="work-status">Getting ready…</div>
+
+        <!-- bar shown during model load / decode -->
+        <div class="bar" id="work-bar"><i id="work-bar-fill"></i></div>
+
+        <!-- waveform shown during transcription -->
+        <div class="wave" id="work-wave" style="display:none"></div>
+
+        <div class="sub" id="work-sub"></div>
+      </div>
+    </section>
+
+    <!-- RESULT -->
+    <section class="stage" id="stage-result">
+      <div class="results-grid">
+        <div class="results-main">
+          <!-- Card A: Instagram / TikTok caption -->
+          <div class="gen-card" id="card-captions">
+            <div class="gen-head">
+              <h3>Instagram / TikTok caption</h3>
+              <div class="actions">
+                <button id="btn-copy-caption">
+                  <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+                  Copy
+                </button>
+                <button id="btn-regen-captions">
+                  <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-2.64-6.36"/><path d="M21 3v6h-6"/></svg>
+                  Regenerate
+                </button>
+              </div>
+            </div>
+            <div id="captions-body"></div>
+          </div>
+
+          <!-- Card B: YouTube Shorts -->
+          <div class="gen-card" id="card-youtube">
+            <div class="gen-head">
+              <h3>YouTube Shorts</h3>
+              <div class="actions">
+                <button id="btn-regen-youtube">
+                  <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-2.64-6.36"/><path d="M21 3v6h-6"/></svg>
+                  <span id="yt-btn-label">Generate</span>
+                </button>
+              </div>
+            </div>
+            <div class="gen-options">
+              <input type="url" id="opt-link" placeholder="Full episode link (optional)" />
+              <input type="text" id="opt-guest" placeholder="Guest name (optional)" />
+            </div>
+            <div id="youtube-body"></div>
+          </div>
+        </div>
+
+        <!-- Side panel: the transcript, as reference -->
+        <aside class="results-side">
+          <div class="side-card">
+            <div class="gen-head">
+              <h3>
+                <span class="tick"><svg viewBox="0 0 24 24" fill="none" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg></span>
+                Transcript
+              </h3>
+              <div class="actions">
+                <button id="btn-copy">
+                  <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+                  Copy
+                </button>
+                <button class="primary" id="btn-download">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M5 21h14"/></svg>
+                  .txt
+                </button>
+              </div>
+            </div>
+            <div class="transcript" id="transcript"></div>
+          </div>
+          <div class="reset-row"><button id="btn-reset">Transcribe another video</button></div>
+        </aside>
+      </div>
+    </section>
+
+    <!-- ERROR -->
+    <section class="stage" id="stage-error">
+      <div class="error">
+        <div class="badge"><svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 9v4"/><path d="M12 17h.01"/><circle cx="12" cy="12" r="10"/></svg></div>
+        <h2 id="err-title">Something went wrong</h2>
+        <p id="err-msg"></p>
+        <button id="btn-retry">Try again</button>
+      </div>
+    </section>
+  </div>
+
+  <footer>
+    <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+    Private by design — your video never leaves this browser.
+  </footer>
+</main>
+
+<script type="module">
+  import { pipeline } from 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@3';
+
+  // ---- element refs ----
+  const el = (id) => document.getElementById(id);
+  const stages = {
+    idle: el('stage-idle'),
+    work: el('stage-work'),
+    result: el('stage-result'),
+    error: el('stage-error'),
+  };
+  const drop = el('drop');
+  const fileInput = el('file');
+  const workName = el('work-name');
+  const workStatus = el('work-status');
+  const workBar = el('work-bar');
+  const workBarFill = el('work-bar-fill');
+  const workWave = el('work-wave');
+  const workSub = el('work-sub');
+  const transcriptEl = el('transcript');
+
+  // build waveform bars
+  for (let i = 0; i < 40; i++) {
+    const s = document.createElement('span');
+    s.style.animationDelay = (i * 0.05) + 's';
+    workWave.appendChild(s);
+  }
+
+  let transcriber = null;      // cached model pipeline
+  let lastText = '';
+  let lastName = 'transcript';
+
+  const mainEl = document.querySelector('main');
+  const panelEl = document.querySelector('.panel');
+
+  function show(stage) {
+    Object.values(stages).forEach(s => s.classList.remove('active'));
+    stages[stage].classList.add('active');
+    // the results view is wider and draws its own cards instead of the panel
+    const wide = stage === 'result';
+    mainEl.classList.toggle('wide', wide);
+    panelEl.classList.toggle('bare', wide);
+  }
+
+  function setBar(pct) {
+    workBar.style.display = 'block';
+    workWave.style.display = 'none';
+    workBar.classList.remove('indeterminate');
+    workBarFill.style.width = Math.max(0, Math.min(100, pct)) + '%';
+  }
+  function setIndeterminate() {
+    workBar.style.display = 'block';
+    workWave.style.display = 'none';
+    workBar.classList.add('indeterminate');
+    workBarFill.style.width = '';
+  }
+  function setWave() {
+    workBar.style.display = 'none';
+    workWave.style.display = 'flex';
+  }
+
+  // ---- audio: decode any file to 16kHz mono Float32 ----
+  async function decodeTo16k(file) {
+    const arrayBuf = await file.arrayBuffer();
+    const AudioCtx = window.AudioContext || window.webkitAudioContext;
+    const tmpCtx = new AudioCtx();
+    let decoded;
+    try {
+      decoded = await tmpCtx.decodeAudioData(arrayBuf.slice(0));
+    } finally {
+      tmpCtx.close();
+    }
+    // resample to 16kHz mono via OfflineAudioContext
+    const targetRate = 16000;
+    const frames = Math.ceil(decoded.duration * targetRate);
+    const off = new OfflineAudioContext(1, frames, targetRate);
+    const src = off.createBufferSource();
+    src.buffer = decoded;
+    src.connect(off.destination);
+    src.start(0);
+    const rendered = await off.startRendering();
+    return rendered.getChannelData(0);
+  }
+
+  // ---- load model (once), reporting download progress ----
+  async function ensureModel() {
+    if (transcriber) return transcriber;
+    const useGPU = 'gpu' in navigator;
+    workStatus.textContent = 'Preparing the model…';
+    workSub.textContent = 'First time only — this downloads once, then it is cached.';
+    setBar(0);
+
+    const files = {};
+    const onProgress = (p) => {
+      if (p.status === 'progress' && p.total) {
+        files[p.file] = p.loaded / p.total;
+        const vals = Object.values(files);
+        const avg = vals.reduce((a, b) => a + b, 0) / vals.length;
+        setBar(avg * 100);
+      } else if (p.status === 'download' || p.status === 'initiate') {
+        if (!(p.file in files)) files[p.file] = 0;
+      }
+    };
+
+    try {
+      transcriber = await pipeline('automatic-speech-recognition', 'onnx-community/whisper-base', {
+        device: useGPU ? 'webgpu' : 'wasm',
+        progress_callback: onProgress,
+      });
+    } catch (e) {
+      // fall back to wasm if webgpu init failed
+      transcriber = await pipeline('automatic-speech-recognition', 'onnx-community/whisper-base', {
+        device: 'wasm',
+        progress_callback: onProgress,
+      });
+    }
+    return transcriber;
+  }
+
+  // ---- main flow ----
+  async function handleFile(file) {
+    if (!file) return;
+    lastName = file.name.replace(/\.[^.]+$/, '') || 'transcript';
+    workName.textContent = file.name;
+    show('work');
+
+    try {
+      await ensureModel();
+
+      workStatus.textContent = 'Reading the audio…';
+      workSub.textContent = '';
+      setIndeterminate();
+      const audio = await decodeTo16k(file);
+
+      workStatus.textContent = 'Listening & writing…';
+      workSub.textContent = 'Longer videos take longer. Keep this tab open.';
+      setWave();
+
+      const started = Date.now();
+      const timer = setInterval(() => {
+        const s = Math.floor((Date.now() - started) / 1000);
+        workSub.textContent = `Working… ${s}s elapsed. Keep this tab open.`;
+      }, 1000);
+
+      let output;
+      try {
+        output = await transcriber(audio, {
+          chunk_length_s: 30,
+          stride_length_s: 5,
+          return_timestamps: false,
+        });
+      } finally {
+        clearInterval(timer);
+      }
+
+      lastText = (output.text || '').trim();
+      transcriptEl.textContent = lastText || '(No speech detected.)';
+      show('result');
+      startGeneration();
+    } catch (err) {
+      console.error(err);
+      showError(err);
+    }
+  }
+
+  function showError(err) {
+    const msg = (err && err.message) ? err.message : String(err);
+    let friendly = msg;
+    if (/decodeAudioData|Unable to decode|EncodingError/i.test(msg)) {
+      friendly = "That file's audio couldn't be read. Try an MP4, MOV, WebM, MP3 or WAV — or convert it first.";
+    } else if (/network|fetch|Failed to load|Load model/i.test(msg)) {
+      friendly = "The model couldn't be downloaded. Check your internet connection and try again — the first run needs to fetch it.";
+    }
+    el('err-msg').textContent = friendly;
+    show('error');
+  }
+
+  // ---- social copy generation (calls our own /api/generate — the API key
+  //      lives on the server, never in this page) ----
+  const captionsBody = el('captions-body');
+  const youtubeBody = el('youtube-body');
+  const optLink = el('opt-link');
+  const optGuest = el('opt-guest');
+
+  let captionText = '';
+  let ytTitle = '';
+  let ytDescription = '';
+  let captionsBusy = false;
+  let youtubeBusy = false;
+
+  const COPY_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>';
+  const CHECK_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>';
+
+  function flashCopied(btn) {
+    const original = btn.innerHTML;
+    btn.classList.add('copied');
+    btn.innerHTML = CHECK_SVG + ' Copied';
+    setTimeout(() => { btn.classList.remove('copied'); btn.innerHTML = original; }, 1600);
+  }
+
+  async function copyText(text, btn) {
+    if (!text) return;
+    try {
+      await navigator.clipboard.writeText(text);
+      flashCopied(btn);
+    } catch (_) {}
+  }
+
+  function miniWave(label) {
+    const wrap = document.createElement('div');
+    wrap.className = 'gen-status';
+    const wave = document.createElement('div');
+    wave.className = 'wave mini';
+    for (let i = 0; i < 24; i++) {
+      const s = document.createElement('span');
+      s.style.animationDelay = (i * 0.05) + 's';
+      wave.appendChild(s);
+    }
+    const msg = document.createElement('div');
+    msg.className = 'msg';
+    msg.textContent = label;
+    wrap.append(wave, msg);
+    return wrap;
+  }
+
+  function cardError(message, retry) {
+    const wrap = document.createElement('div');
+    wrap.className = 'gen-error';
+    const p = document.createElement('p');
+    p.textContent = message;
+    const b = document.createElement('button');
+    b.textContent = 'Retry';
+    b.addEventListener('click', retry);
+    wrap.append(p, b);
+    return wrap;
+  }
+
+  async function callGenerate(mode) {
+    const payload = { mode, transcript: lastText };
+    if (mode === 'youtube') {
+      if (optLink.value.trim()) payload.episodeLink = optLink.value.trim();
+      if (optGuest.value.trim()) payload.guest = optGuest.value.trim();
+    }
+    const res = await fetch('/api/generate', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    let data = {};
+    try { data = await res.json(); } catch (_) {}
+    if (!res.ok) throw new Error(data.error || `Request failed (${res.status}).`);
+    return data.text || '';
+  }
+
+  function renderCaptions(text) {
+    captionText = text.trim();
+    const out = document.createElement('div');
+    out.className = 'gen-output';
+    out.textContent = captionText;
+    captionsBody.replaceChildren(out);
+  }
+
+  // The youtube prompt asks the model for "TITLE: ..." then "DESCRIPTION:"
+  // on its own line — split on that so each part gets its own copy button.
+  function parseYouTube(raw) {
+    let title = raw;
+    let description = '';
+    const idx = raw.indexOf('DESCRIPTION:');
+    if (idx !== -1) {
+      title = raw.slice(0, idx);
+      description = raw.slice(idx + 'DESCRIPTION:'.length);
+    }
+    title = title.replace(/^\s*TITLE:\s*/i, '').trim();
+    description = description.trim();
+    return { title, description };
+  }
+
+  function ytBlock(labelText, text, getCopyValue) {
+    const block = document.createElement('div');
+    block.className = 'gen-block';
+    const label = document.createElement('div');
+    label.className = 'gen-label';
+    const span = document.createElement('span');
+    span.textContent = labelText;
+    const btn = document.createElement('button');
+    btn.innerHTML = COPY_SVG + ' Copy';
+    btn.addEventListener('click', () => copyText(getCopyValue(), btn));
+    label.append(span, btn);
+    const out = document.createElement('div');
+    out.className = 'gen-output';
+    out.textContent = text;
+    block.append(label, out);
+    return block;
+  }
+
+  function renderYouTube(raw) {
+    const parsed = parseYouTube(raw);
+    ytTitle = parsed.title;
+    ytDescription = parsed.description;
+    youtubeBody.replaceChildren(
+      ytBlock('Title', ytTitle, () => ytTitle),
+      ytBlock('Description', ytDescription, () => ytDescription),
+    );
+  }
+
+  function emptyNote(container) {
+    const d = document.createElement('div');
+    d.className = 'gen-empty';
+    d.textContent = 'No speech was detected in this video, so there is nothing to write from.';
+    container.replaceChildren(d);
+  }
+
+  async function loadCaptions() {
+    if (captionsBusy) return;
+    if (!lastText) { emptyNote(captionsBody); return; }
+    captionsBusy = true;
+    captionText = '';
+    captionsBody.replaceChildren(miniWave('Writing your caption…'));
+    try {
+      renderCaptions(await callGenerate('captions'));
+    } catch (err) {
+      captionsBody.replaceChildren(cardError(err.message || 'Something went wrong.', loadCaptions));
+    } finally {
+      captionsBusy = false;
+    }
+  }
+
+  const ytBtnLabel = el('yt-btn-label');
+
+  async function loadYouTube() {
+    if (youtubeBusy) return;
+    if (!lastText) { emptyNote(youtubeBody); return; }
+    youtubeBusy = true;
+    ytTitle = ''; ytDescription = '';
+    youtubeBody.replaceChildren(miniWave('Writing title & description…'));
+    try {
+      renderYouTube(await callGenerate('youtube'));
+      ytBtnLabel.textContent = 'Regenerate';
+    } catch (err) {
+      youtubeBody.replaceChildren(cardError(err.message || 'Something went wrong.', loadYouTube));
+    } finally {
+      youtubeBusy = false;
+    }
+  }
+
+  // shown in the YouTube card until the user clicks Generate
+  function ytIdleNote() {
+    const d = document.createElement('div');
+    d.className = 'gen-empty';
+    d.textContent = 'Add the episode link and guest name above if you have them, then hit Generate.';
+    youtubeBody.replaceChildren(d);
+  }
+
+  function startGeneration() {
+    // captions auto-generate; YouTube waits for an explicit Generate click
+    loadCaptions();
+    ytBtnLabel.textContent = 'Generate';
+    ytIdleNote();
+  }
+
+  el('btn-regen-captions').addEventListener('click', loadCaptions);
+  el('btn-regen-youtube').addEventListener('click', loadYouTube);
+  el('btn-copy-caption').addEventListener('click', (e) => copyText(captionText, e.currentTarget));
+
+  function reset() {
+    fileInput.value = '';
+    lastText = '';
+    captionText = '';
+    ytTitle = '';
+    ytDescription = '';
+    captionsBody.replaceChildren();
+    youtubeBody.replaceChildren();
+    ytBtnLabel.textContent = 'Generate';
+    show('idle');
+  }
+
+  // ---- events ----
+  drop.addEventListener('click', () => fileInput.click());
+  fileInput.addEventListener('change', (e) => handleFile(e.target.files[0]));
+
+  ['dragenter', 'dragover'].forEach(ev =>
+    drop.addEventListener(ev, (e) => { e.preventDefault(); drop.classList.add('drag'); }));
+  ['dragleave', 'drop'].forEach(ev =>
+    drop.addEventListener(ev, (e) => { e.preventDefault(); drop.classList.remove('drag'); }));
+  drop.addEventListener('drop', (e) => {
+    const f = e.dataTransfer.files && e.dataTransfer.files[0];
+    if (f) handleFile(f);
+  });
+
+  el('btn-reset').addEventListener('click', reset);
+  el('btn-retry').addEventListener('click', reset);
+
+  el('btn-copy').addEventListener('click', (e) => copyText(lastText, e.currentTarget));
+
+  el('btn-download').addEventListener('click', () => {
+    const blob = new Blob([lastText], { type: 'text/plain;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = lastName + '.txt';
+    a.click();
+    URL.revokeObjectURL(url);
+  });
+</script>
+</body>
+</html>
