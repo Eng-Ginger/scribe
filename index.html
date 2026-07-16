@@ -313,6 +313,58 @@
   .error h2 { font-family: 'Space Grotesk', sans-serif; font-size: 18px; margin-bottom: 8px; }
   .error p { color: var(--muted); font-size: 14px; line-height: 1.55; max-width: 400px; margin: 0 auto 20px; }
 
+  /* ---------- History ---------- */
+  .history { margin-top: 26px; animation: rise .45s cubic-bezier(.2,.7,.2,1) both; }
+  .history-head {
+    display: flex; align-items: center; justify-content: space-between;
+    margin-bottom: 10px; padding: 0 6px;
+  }
+  .history-head h3 {
+    font-family: 'Space Grotesk', sans-serif;
+    font-size: 13px; font-weight: 600; letter-spacing: .05em; text-transform: uppercase;
+    color: var(--muted);
+  }
+  .history-head button {
+    border: none; background: none; color: var(--muted); font-size: 12.5px; padding: 4px 8px;
+  }
+  .history-head button:hover { color: var(--danger); background: none; }
+
+  .history-card {
+    background: var(--card);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    box-shadow: var(--shadow);
+    overflow: hidden;
+  }
+  .h-row {
+    display: flex; align-items: center; gap: 12px;
+    padding: 13px 16px;
+    cursor: pointer;
+    transition: background .18s ease;
+  }
+  .h-row + .h-row { border-top: 1px solid var(--line); }
+  .h-row:hover { background: var(--bg-soft); }
+  .h-info { flex: 1; min-width: 0; }
+  .h-name {
+    font-size: 14px; font-weight: 550;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .h-meta {
+    font-size: 12px; color: var(--muted); margin-top: 3px;
+    display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  }
+  .h-badge {
+    font-size: 10.5px; font-weight: 600; letter-spacing: .04em;
+    color: var(--accent); background: rgba(109,90,230,.09);
+    padding: 2px 8px; border-radius: 99px;
+  }
+  .h-del {
+    border: none; background: none; color: var(--muted);
+    padding: 7px; border-radius: 8px; flex: none;
+  }
+  .h-del:hover { color: var(--danger); background: rgba(216,80,106,.08); }
+  .h-del svg { width: 15px; height: 15px; }
+
   /* ---------- Footer ---------- */
   footer {
     text-align: center; margin-top: 28px;
@@ -445,6 +497,15 @@
     </section>
   </div>
 
+  <!-- HISTORY (local only — stored in this browser via IndexedDB) -->
+  <section class="history" id="history-section" style="display:none">
+    <div class="history-head">
+      <h3>History</h3>
+      <button id="btn-clear-history">Clear all</button>
+    </div>
+    <div class="history-card" id="history-list"></div>
+  </section>
+
   <footer>
     <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
     Private by design — your video never leaves this browser.
@@ -493,6 +554,13 @@
     const wide = stage === 'result';
     mainEl.classList.toggle('wide', wide);
     panelEl.classList.toggle('bare', wide);
+    // history is shown on the idle screen only (renderHistory unhides it if
+    // there are saved entries)
+    if (stage === 'idle') {
+      renderHistory();
+    } else {
+      el('history-section').style.display = 'none';
+    }
   }
 
   function setBar(pct) {
@@ -514,13 +582,18 @@
 
   // ---- audio: decode any file to 16kHz mono Float32 ----
   async function decodeTo16k(file) {
-    const arrayBuf = await file.arrayBuffer();
+    let arrayBuf = await file.arrayBuffer();
     const AudioCtx = window.AudioContext || window.webkitAudioContext;
     const tmpCtx = new AudioCtx();
     let decoded;
     try {
-      decoded = await tmpCtx.decodeAudioData(arrayBuf.slice(0));
+      // Pass the buffer directly — decodeAudioData may take ownership of it.
+      // The old arrayBuf.slice(0) made a full copy of the whole video in RAM,
+      // doubling peak memory; on phones that pushed the tab over the browser's
+      // memory limit, which kills and silently reloads the page.
+      decoded = await tmpCtx.decodeAudioData(arrayBuf);
     } finally {
+      arrayBuf = null; // release the raw file bytes as early as possible
       tmpCtx.close();
     }
     // resample to 16kHz mono via OfflineAudioContext
@@ -532,13 +605,23 @@
     src.connect(off.destination);
     src.start(0);
     const rendered = await off.startRendering();
+    // drop the big native-rate decode before inference runs, so the model and
+    // the audio never have to coexist with it in memory
+    decoded = null;
     return rendered.getChannelData(0);
   }
+
+  // ---- mobile detection ----
+  // Phones have a much smaller per-tab memory budget than desktops; when a tab
+  // exceeds it, the browser kills and silently reloads the page. Treat classic
+  // mobile user agents as mobile, and also "no WebGPU + touch screen" devices.
+  const IS_MOBILE =
+    /Android|iPhone|iPad|iPod/i.test(navigator.userAgent) ||
+    (!('gpu' in navigator) && navigator.maxTouchPoints > 0);
 
   // ---- load model (once), reporting download progress ----
   async function ensureModel() {
     if (transcriber) return transcriber;
-    const useGPU = 'gpu' in navigator;
     workStatus.textContent = 'Preparing the model…';
     workSub.textContent = 'First time only — this downloads once, then it is cached.';
     setBar(0);
@@ -555,6 +638,18 @@
       }
     };
 
+    if (IS_MOBILE) {
+      // Smallest model + wasm + 8-bit weights: fits inside a phone tab's
+      // memory limit where whisper-base does not.
+      transcriber = await pipeline('automatic-speech-recognition', 'Xenova/whisper-tiny', {
+        device: 'wasm',
+        dtype: 'q8',
+        progress_callback: onProgress,
+      });
+      return transcriber;
+    }
+
+    const useGPU = 'gpu' in navigator;
     try {
       transcriber = await pipeline('automatic-speech-recognition', 'onnx-community/whisper-base', {
         device: useGPU ? 'webgpu' : 'wasm',
@@ -608,6 +703,17 @@
 
       lastText = (output.text || '').trim();
       transcriptEl.textContent = lastText || '(No speech detected.)';
+
+      // save to local history (best-effort — never blocks the main flow)
+      currentEntryId = null;
+      try {
+        currentEntryId = await dbAdd({
+          name: file.name,
+          transcript: lastText,
+          createdAt: Date.now(),
+        });
+      } catch (_) {}
+
       show('result');
       startGeneration();
     } catch (err) {
@@ -623,6 +729,9 @@
       friendly = "That file's audio couldn't be read. Try an MP4, MOV, WebM, MP3 or WAV — or convert it first.";
     } else if (/network|fetch|Failed to load|Load model/i.test(msg)) {
       friendly = "The model couldn't be downloaded. Check your internet connection and try again — the first run needs to fetch it.";
+    } else if (IS_MOBILE) {
+      // on phones the usual culprit is running out of memory mid-transcription
+      friendly = "This video may be too large for a phone browser — try a shorter clip or use a computer.";
     }
     el('err-msg').textContent = friendly;
     show('error');
@@ -746,14 +855,18 @@
     return block;
   }
 
-  function renderYouTube(raw) {
-    const parsed = parseYouTube(raw);
-    ytTitle = parsed.title;
-    ytDescription = parsed.description;
+  function renderYouTubeParts(title, description) {
+    ytTitle = title;
+    ytDescription = description;
     youtubeBody.replaceChildren(
       ytBlock('Title', ytTitle, () => ytTitle),
       ytBlock('Description', ytDescription, () => ytDescription),
     );
+  }
+
+  function renderYouTube(raw) {
+    const parsed = parseYouTube(raw);
+    renderYouTubeParts(parsed.title, parsed.description);
   }
 
   function emptyNote(container) {
@@ -771,6 +884,7 @@
     captionsBody.replaceChildren(miniWave('Writing your caption…'));
     try {
       renderCaptions(await callGenerate('captions'));
+      saveToEntry({ caption: captionText });
     } catch (err) {
       captionsBody.replaceChildren(cardError(err.message || 'Something went wrong.', loadCaptions));
     } finally {
@@ -789,6 +903,12 @@
     try {
       renderYouTube(await callGenerate('youtube'));
       ytBtnLabel.textContent = 'Regenerate';
+      saveToEntry({
+        ytTitle,
+        ytDescription,
+        episodeLink: optLink.value.trim(),
+        guest: optGuest.value.trim(),
+      });
     } catch (err) {
       youtubeBody.replaceChildren(cardError(err.message || 'Something went wrong.', loadYouTube));
     } finally {
@@ -816,20 +936,233 @@
   el('btn-copy-caption').addEventListener('click', (e) => copyText(captionText, e.currentTarget));
 
   function reset() {
+    // the finished transcription was already saved to history when it
+    // completed, so starting over never loses it
     fileInput.value = '';
     lastText = '';
     captionText = '';
     ytTitle = '';
     ytDescription = '';
+    currentEntryId = null;
     captionsBody.replaceChildren();
     youtubeBody.replaceChildren();
     ytBtnLabel.textContent = 'Generate';
     show('idle');
   }
 
+  // ---- local history (IndexedDB — stays on this device, nothing uploaded) ----
+  let currentEntryId = null; // id of the history entry for the video on screen
+
+  let dbPromise = null;
+  function openDB() {
+    if (dbPromise) return dbPromise;
+    dbPromise = new Promise((resolve, reject) => {
+      const req = indexedDB.open('scribe', 1);
+      req.onupgradeneeded = () => {
+        const db = req.result;
+        if (!db.objectStoreNames.contains('history')) {
+          db.createObjectStore('history', { keyPath: 'id', autoIncrement: true });
+        }
+      };
+      req.onsuccess = () => resolve(req.result);
+      req.onerror = () => reject(req.error);
+    });
+    return dbPromise;
+  }
+
+  function txStore(db, mode) {
+    return db.transaction('history', mode).objectStore('history');
+  }
+
+  async function dbAdd(entry) {
+    const db = await openDB();
+    return new Promise((resolve, reject) => {
+      const req = txStore(db, 'readwrite').add(entry);
+      req.onsuccess = () => resolve(req.result);
+      req.onerror = () => reject(req.error);
+    });
+  }
+
+  async function dbUpdate(id, patch) {
+    const db = await openDB();
+    return new Promise((resolve, reject) => {
+      const store = txStore(db, 'readwrite');
+      const getReq = store.get(id);
+      getReq.onsuccess = () => {
+        const entry = getReq.result;
+        if (!entry) { resolve(null); return; }
+        const putReq = store.put(Object.assign(entry, patch));
+        putReq.onsuccess = () => resolve(id);
+        putReq.onerror = () => reject(putReq.error);
+      };
+      getReq.onerror = () => reject(getReq.error);
+    });
+  }
+
+  async function dbAll() {
+    const db = await openDB();
+    return new Promise((resolve, reject) => {
+      const req = txStore(db, 'readonly').getAll();
+      req.onsuccess = () => resolve((req.result || []).sort((a, b) => b.createdAt - a.createdAt));
+      req.onerror = () => reject(req.error);
+    });
+  }
+
+  async function dbDelete(id) {
+    const db = await openDB();
+    return new Promise((resolve, reject) => {
+      const req = txStore(db, 'readwrite').delete(id);
+      req.onsuccess = () => resolve();
+      req.onerror = () => reject(req.error);
+    });
+  }
+
+  async function dbClear() {
+    const db = await openDB();
+    return new Promise((resolve, reject) => {
+      const req = txStore(db, 'readwrite').clear();
+      req.onsuccess = () => resolve();
+      req.onerror = () => reject(req.error);
+    });
+  }
+
+  async function saveToEntry(patch) {
+    if (currentEntryId == null) return;
+    try { await dbUpdate(currentEntryId, patch); } catch (_) {}
+  }
+
+  // ---- history UI ----
+  const historySection = el('history-section');
+  const historyList = el('history-list');
+  const TRASH_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>';
+
+  function formatWhen(ts) {
+    return new Date(ts).toLocaleString(undefined, {
+      month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit',
+    });
+  }
+
+  function historyRow(entry) {
+    const row = document.createElement('div');
+    row.className = 'h-row';
+
+    const info = document.createElement('div');
+    info.className = 'h-info';
+    const name = document.createElement('div');
+    name.className = 'h-name';
+    name.textContent = entry.name || 'Untitled';
+    const meta = document.createElement('div');
+    meta.className = 'h-meta';
+    const when = document.createElement('span');
+    when.textContent = formatWhen(entry.createdAt);
+    meta.appendChild(when);
+    if (entry.caption) {
+      const b = document.createElement('span');
+      b.className = 'h-badge';
+      b.textContent = 'caption';
+      meta.appendChild(b);
+    }
+    if (entry.ytTitle || entry.ytDescription) {
+      const b = document.createElement('span');
+      b.className = 'h-badge';
+      b.textContent = 'youtube';
+      meta.appendChild(b);
+    }
+    info.append(name, meta);
+
+    const del = document.createElement('button');
+    del.className = 'h-del';
+    del.innerHTML = TRASH_SVG;
+    del.title = 'Delete this entry';
+    del.addEventListener('click', async (e) => {
+      e.stopPropagation(); // don't also open the entry
+      try { await dbDelete(entry.id); } catch (_) {}
+      renderHistory();
+    });
+
+    row.append(info, del);
+    row.addEventListener('click', () => openEntry(entry));
+    return row;
+  }
+
+  async function renderHistory() {
+    const clearBtn = el('btn-clear-history');
+    try {
+      const entries = await dbAll();
+      if (!entries.length) {
+        historySection.style.display = 'none';
+        return;
+      }
+      clearBtn.style.display = '';
+      historyList.replaceChildren(...entries.map(historyRow));
+      historySection.style.display = '';
+    } catch (_) {
+      // IndexedDB unavailable (e.g. private browsing) — say so instead of
+      // silently hiding the section
+      clearBtn.style.display = 'none';
+      savedNote(historyList, "History can't be saved in this browser session — private browsing usually blocks local storage. Transcripts will still work, they just won't be remembered.");
+      historySection.style.display = '';
+    }
+  }
+
+  function savedNote(container, msg) {
+    const d = document.createElement('div');
+    d.className = 'gen-empty';
+    d.textContent = msg;
+    container.replaceChildren(d);
+  }
+
+  function openEntry(entry) {
+    currentEntryId = entry.id;
+    lastText = entry.transcript || '';
+    lastName = (entry.name || 'transcript').replace(/\.[^.]+$/, '') || 'transcript';
+    transcriptEl.textContent = lastText || '(No speech detected.)';
+    optLink.value = entry.episodeLink || '';
+    optGuest.value = entry.guest || '';
+
+    if (entry.caption) {
+      renderCaptions(entry.caption);
+    } else {
+      captionText = '';
+      savedNote(captionsBody, 'No caption saved for this clip — hit Regenerate to write one.');
+    }
+
+    if (entry.ytTitle || entry.ytDescription) {
+      renderYouTubeParts(entry.ytTitle || '', entry.ytDescription || '');
+      ytBtnLabel.textContent = 'Regenerate';
+    } else {
+      ytTitle = ''; ytDescription = '';
+      ytBtnLabel.textContent = 'Generate';
+      ytIdleNote();
+    }
+
+    show('result');
+  }
+
+  el('btn-clear-history').addEventListener('click', async () => {
+    if (!window.confirm('Delete all saved transcriptions from this browser?')) return;
+    try { await dbClear(); } catch (_) {}
+    renderHistory();
+  });
+
+  renderHistory(); // populate on first load
+
   // ---- events ----
+
+  // If a file is dropped anywhere OUTSIDE the dropzone, the browser's default
+  // action is to navigate the page to that file — which looks like a refresh
+  // that loses everything. Block it globally; the dropzone still gets its drops.
+  ['dragover', 'drop'].forEach(ev =>
+    window.addEventListener(ev, (e) => e.preventDefault()));
+
   drop.addEventListener('click', () => fileInput.click());
-  fileInput.addEventListener('change', (e) => handleFile(e.target.files[0]));
+  fileInput.addEventListener('change', (e) => {
+    const f = e.target.files[0];
+    // reset so picking the same file again re-triggers this handler
+    // (matters on mobile after an interrupted attempt)
+    fileInput.value = '';
+    handleFile(f);
+  });
 
   ['dragenter', 'dragover'].forEach(ev =>
     drop.addEventListener(ev, (e) => { e.preventDefault(); drop.classList.add('drag'); }));
