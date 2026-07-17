@@ -92,6 +92,13 @@ function sendJson(res, status, obj) {
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, `http://localhost:${PORT}`);
 
+  // Cross-origin isolation — mirrors vercel.json so local dev matches
+  // production. These enable SharedArrayBuffer, which lets the wasm
+  // transcription backend run multithreaded (much faster). COEP
+  // "credentialless" still allows the fonts / CDN / model to load.
+  res.setHeader('Cross-Origin-Opener-Policy', 'same-origin');
+  res.setHeader('Cross-Origin-Embedder-Policy', 'credentialless');
+
   // ---- API route ----
   if (url.pathname === '/api/generate') {
     if (req.method !== 'POST') {

@@ -643,32 +643,26 @@
       }
     };
 
-    if (IS_MOBILE) {
-      // Same accurate model as desktop, on wasm (phones lack reliable WebGPU).
-      // whisper-tiny with q8 weights fit in less memory but produced garbage
-      // transcripts, so accuracy wins; clips are short. If a phone runs out of
-      // memory, handleFile's catch shows the friendly "too large for a phone"
-      // message instead of a silent reload.
-      transcriber = await pipeline('automatic-speech-recognition', 'onnx-community/whisper-base', {
-        device: 'wasm',
+    // One model on every device (whisper-base). Prefer the GPU wherever it's
+    // available — recent iPad/Safari expose navigator.gpu and are far faster on
+    // WebGPU than CPU wasm — and fall back to wasm if WebGPU is missing or its
+    // pipeline load throws. Same path for desktop, iPad, and phones.
+    const load = (device) =>
+      pipeline('automatic-speech-recognition', 'onnx-community/whisper-base', {
+        device,
         progress_callback: onProgress,
       });
-      return transcriber;
-    }
 
-    const useGPU = 'gpu' in navigator;
-    try {
-      transcriber = await pipeline('automatic-speech-recognition', 'onnx-community/whisper-base', {
-        device: useGPU ? 'webgpu' : 'wasm',
-        progress_callback: onProgress,
-      });
-    } catch (e) {
-      // fall back to wasm if webgpu init failed
-      transcriber = await pipeline('automatic-speech-recognition', 'onnx-community/whisper-base', {
-        device: 'wasm',
-        progress_callback: onProgress,
-      });
+    if ('gpu' in navigator) {
+      try {
+        transcriber = await load('webgpu');
+        return transcriber;
+      } catch (e) {
+        // WebGPU present but init/compile failed — fall through to wasm
+        console.warn('WebGPU load failed, falling back to wasm:', e);
+      }
     }
+    transcriber = await load('wasm');
     return transcriber;
   }
 
