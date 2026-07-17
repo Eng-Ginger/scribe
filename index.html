@@ -544,6 +544,11 @@
   let lastText = '';
   let lastName = 'transcript';
 
+  // All clips are English — locking the language stops Whisper from
+  // mis-detecting and dropping audio. Change to another language name
+  // (e.g. 'arabic') if that ever changes.
+  const TRANSCRIBE_LANGUAGE = 'english';
+
   const mainEl = document.querySelector('main');
   const panelEl = document.querySelector('.panel');
 
@@ -695,13 +700,24 @@
         output = await transcriber(audio, {
           chunk_length_s: 30,
           stride_length_s: 5,
-          return_timestamps: false,
+          // Timestamps are required for Whisper to stitch multiple 30s chunks
+          // into one full transcript — with them off, only the first chunk
+          // comes back. Applies to both the desktop and mobile models, since
+          // both go through this same call.
+          return_timestamps: true,
+          language: TRANSCRIBE_LANGUAGE,
         });
       } finally {
         clearInterval(timer);
       }
 
-      lastText = (output.text || '').trim();
+      // Build the transcript from the FULL result: output.text when present,
+      // otherwise stitch the per-chunk texts together.
+      lastText = (
+        (output && output.text) ||
+        ((output && output.chunks) || []).map((c) => c.text).join(' ') ||
+        ''
+      ).trim();
       transcriptEl.textContent = lastText || '(No speech detected.)';
 
       // save to local history (best-effort — never blocks the main flow)
