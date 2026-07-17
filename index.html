@@ -644,11 +644,13 @@
     };
 
     if (IS_MOBILE) {
-      // Smallest model + wasm + 8-bit weights: fits inside a phone tab's
-      // memory limit where whisper-base does not.
-      transcriber = await pipeline('automatic-speech-recognition', 'Xenova/whisper-tiny', {
+      // Same accurate model as desktop, on wasm (phones lack reliable WebGPU).
+      // whisper-tiny with q8 weights fit in less memory but produced garbage
+      // transcripts, so accuracy wins; clips are short. If a phone runs out of
+      // memory, handleFile's catch shows the friendly "too large for a phone"
+      // message instead of a silent reload.
+      transcriber = await pipeline('automatic-speech-recognition', 'onnx-community/whisper-base', {
         device: 'wasm',
-        dtype: 'q8',
         progress_callback: onProgress,
       });
       return transcriber;
